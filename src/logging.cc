@@ -56,6 +56,7 @@
 #ifdef HAVE_SYSLOG_H
 # include <syslog.h>
 #endif
+#include <list>
 #include <vector>
 #include <cerrno>                   // for errno
 #include <sstream>
@@ -77,6 +78,7 @@
 #include <android/log.h>
 #endif
 
+using std::list;
 using std::string;
 using std::vector;
 using std::setw;
@@ -194,6 +196,14 @@ GLOG_DEFINE_string(log_link, "", "Put additional links to the log "
 GLOG_DEFINE_uint32(max_log_size, 1800,
                    "approx. maximum log file size (in MB). A value of 0 will "
                    "be silently overridden to 1.");
+
+GLOG_DEFINE_string(log_rolling_policy, "size",
+                   "log file rolling policy, support size-based and time-based."
+                   " The available values are size, day and hour, if use time-based policy,"
+                   " the maximum log file size also control by max_log_size");
+
+GLOG_DEFINE_int32(max_logfile_num, 10,
+                  "maximum history log file num after rolling");
 
 GLOG_DEFINE_bool(stop_logging_if_full_disk, false,
                  "Stop attempting to log to disk if the disk is full.");
@@ -428,6 +438,13 @@ namespace  {
 #endif
 
 namespace {
+typedef struct filetime {
+  std::string name;
+  time_t time;
+  bool operator<(const struct filetime& o) const {
+    return o.time > time;
+  }
+} Filetime;
 
 // Encapsulates all file-system related state
 class LogFileObject : public base::Logger {
@@ -459,6 +476,7 @@ class LogFileObject : public base::Logger {
   // can avoid grabbing a lock.  Usually Flush() calls it after
   // acquiring lock_.
   void FlushUnlocked();
+  void CheckHistoryFileNum();
 
  private:
   static const uint32 kRolloverAttemptFrequency = 0x20;
@@ -476,6 +494,9 @@ class LogFileObject : public base::Logger {
   unsigned int rollover_attempt_;
   int64 next_flush_time_;         // cycle count at which to flush log
   WallTime start_time_;
+  std::list<Filetime> file_list_;
+  bool inited_;
+  struct ::tm tm_time_;
 
   // Actually create a logfile using the value of base_filename_ and the
   // optional argument time_pid_string
@@ -976,7 +997,8 @@ LogFileObject::LogFileObject(LogSeverity severity,
     file_length_(0),
     rollover_attempt_(kRolloverAttemptFrequency-1),
     next_flush_time_(0),
-    start_time_(WallTime_Now()) {
+    start_time_(WallTime_Now()),
+    inited_(false){
   assert(severity >= 0);
   assert(severity < NUM_SEVERITIES);
 }
@@ -1097,6 +1119,9 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
     }
   }
 #endif
+  Filetime ft;
+  ft.name = string_filename;
+  file_list_.push_back(ft);
   // We try to create a symlink called <program_name>.<severity>,
   // which is easier to use.  (Every time we create a new logfile,
   // we destroy the old symlink and create a new one, so it always
@@ -1138,6 +1163,54 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   return true;  // Everything worked
 }
 
+void LogFileObject::CheckHistoryFileNum() {
+  struct dirent *entry;
+  DIR *dp;
+
+  const vector<string> &log_dirs = GetLoggingDirectories();
+  if (log_dirs.size() < 1) return;
+
+  // list file in log dir
+  dp = opendir(log_dirs[0].c_str());
+  if (dp == NULL) {
+    fprintf(stderr, "open log dir %s fail\n", log_dirs[0].c_str());
+    return;
+  }
+
+  file_list_.clear();
+  while ((entry = readdir(dp)) != NULL) {
+    if (DT_DIR == entry->d_type ||
+        DT_LNK == entry->d_type) {
+      continue;
+    }
+    std::string filename = std::string(entry->d_name);
+
+    if (filename.find(symlink_basename_ + '.' + LogSeverityNames[severity_]) == 0) {
+      std::string filepath = log_dirs[0] + "/" + filename;
+
+      struct stat fstat;
+      if (::stat(filepath.c_str(), &fstat) < 0) {
+        fprintf(stderr, "state %s fail\n", filepath.c_str());
+        closedir(dp);
+        return;
+      }
+
+      Filetime file_time;
+      file_time.time = fstat.st_mtime;
+      file_time.name = filepath;
+      file_list_.push_back(file_time);
+    }
+  }
+  closedir(dp);
+
+  file_list_.sort();
+
+  while (FLAGS_max_logfile_num > 0 && file_list_.size() >= FLAGS_max_logfile_num) {
+    unlink(file_list_.front().name.c_str());
+    file_list_.pop_front();
+  }
+}
+
 void LogFileObject::Write(bool force_flush,
                           time_t timestamp,
                           const char* message,
@@ -1148,12 +1221,49 @@ void LogFileObject::Write(bool force_flush,
   if (base_filename_selected_ && base_filename_.empty()) {
     return;
   }
-
-  if (file_length_ >> 20U >= MaxLogSize() || PidHasChanged()) {
+  struct ::tm tm_time;
+  bool is_split = false;
+  if ("day" == FLAGS_log_rolling_policy) {
+    localtime_r(&timestamp, &tm_time);
+    if (tm_time.tm_year != tm_time_.tm_year
+        || tm_time.tm_mon != tm_time_.tm_mon
+        || tm_time.tm_mday != tm_time_.tm_mday) {
+      is_split = true;
+    }
+  } else if ("hour" == FLAGS_log_rolling_policy) {
+    localtime_r(&timestamp, &tm_time);
+    if (tm_time.tm_year != tm_time_.tm_year
+        || tm_time.tm_mon != tm_time_.tm_mon
+        || tm_time.tm_mday != tm_time_.tm_mday
+        || tm_time.tm_hour != tm_time_.tm_hour) {
+      is_split = true;
+    }
+  } else if (file_length_ >> 20U >= MaxLogSize() || PidHasChanged()) {
+    is_split = true;
+  }
+  if (is_split) {
     if (file_ != NULL) fclose(file_);
     file_ = NULL;
     file_length_ = bytes_since_flush_ = dropped_mem_length_ = 0;
     rollover_attempt_ = kRolloverAttemptFrequency - 1;
+  }
+  if ((file_ == NULL) && (!inited_) && ("size" == FLAGS_log_rolling_policy)) {
+    CheckHistoryFileNum();
+    const char *filename = file_list_.back().name.c_str();
+    int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, FLAGS_logfile_mode);
+    if (fd != -1) {
+#ifdef HAVE_FCNTL
+      // Mark the file close-on-exec. We don't really care if this fails
+      fcntl(fd, F_SETFD, FD_CLOEXEC);
+#endif
+      file_ = fopen(filename, "a+"); // Read and append a FILE*.
+      if (file_ == NULL) {      // Man, we're screwed!, try to create new log file
+        close(fd);
+      }
+      fseek(file_, 0, SEEK_END);
+      file_length_ = bytes_since_flush_ = ftell(file_);
+      inited_ = true;
+    }
   }
 
   // If there's no destination file, make one before outputting
@@ -1164,7 +1274,15 @@ void LogFileObject::Write(bool force_flush,
     if (++rollover_attempt_ != kRolloverAttemptFrequency) return;
     rollover_attempt_ = 0;
 
-    struct ::tm tm_time;
+    if (!inited_) {
+      CheckHistoryFileNum();
+      inited_ = true;
+    } else {
+      while (FLAGS_max_logfile_num > 0 && file_list_.size() >= FLAGS_max_logfile_num) {
+        unlink(file_list_.front().name.c_str());
+        file_list_.pop_front();
+      }
+    }
     if (FLAGS_log_utc_time) {
       gmtime_r(&timestamp, &tm_time);
     } else {
@@ -1174,16 +1292,20 @@ void LogFileObject::Write(bool force_flush,
     // The logfile's filename will have the date/time & pid in it
     ostringstream time_pid_stream;
     time_pid_stream.fill('0');
-    time_pid_stream << 1900+tm_time.tm_year
-                    << setw(2) << 1+tm_time.tm_mon
-                    << setw(2) << tm_time.tm_mday
-                    << '-'
-                    << setw(2) << tm_time.tm_hour
-                    << setw(2) << tm_time.tm_min
-                    << setw(2) << tm_time.tm_sec
-                    << '.'
-                    << GetMainThreadPid();
-    const string& time_pid_string = time_pid_stream.str();
+    time_pid_stream << 1900 + tm_time.tm_year
+                    << setw(2) << 1 + tm_time.tm_mon
+                    << setw(2) << tm_time.tm_mday;
+    if ("hour" == FLAGS_log_rolling_policy) {
+      time_pid_stream << setw(2) << tm_time.tm_hour;
+    } else if ("day" != FLAGS_log_rolling_policy) {
+      time_pid_stream << '-'
+                      << setw(2) << tm_time.tm_hour
+                      << setw(2) << tm_time.tm_min
+                      << setw(2) << tm_time.tm_sec;
+    }
+    time_pid_stream << '.' << GetMainThreadPid();
+    tm_time_ = tm_time;
+    const string &time_pid_string = time_pid_stream.str();
 
     if (base_filename_selected_) {
       if (!CreateLogfile(time_pid_string)) {
