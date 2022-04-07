@@ -202,7 +202,7 @@ GLOG_DEFINE_string(log_rolling_policy, "size",
                    " The available values are size, day and hour, if use time-based policy,"
                    " the maximum log file size also control by max_log_size");
 
-GLOG_DEFINE_int32(max_logfile_num, 10,
+GLOG_DEFINE_uint32(max_logfile_num, 10,
                   "maximum history log file num after rolling");
 
 GLOG_DEFINE_bool(stop_logging_if_full_disk, false,

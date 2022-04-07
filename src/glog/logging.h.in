@@ -491,7 +491,7 @@ DECLARE_string(vmodule); // also in vlog_is_on.cc
 DECLARE_uint32(max_log_size);
 
 // Set maximum log file num after rolling
-DECLARE_int32(max_logfile_num);
+DECLARE_uint32(max_logfile_num);
 
 // Set log file rolling policy, support size-based and time-based
 // The available values are size, day and hour
