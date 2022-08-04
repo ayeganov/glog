@@ -476,6 +476,9 @@ class LogFileObject : public base::Logger {
   // can avoid grabbing a lock.  Usually Flush() calls it after
   // acquiring lock_.
   void FlushUnlocked();
+
+  // check the logfiles rolling by size or date, and remve the oldest ones
+  // according to FLAGS_max_logfile_num
   void CheckHistoryFileNum();
 
  private:
