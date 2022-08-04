@@ -510,7 +510,7 @@ class LogFileObject : public base::Logger {
   bool CreateLogfileInternal(const char* filename, int flags);
 
   // Check if log file is getting too big or match the date time condition, If so, rollover.
-  bool CheckNeedRollLogFiles(::tm tm_time, time_t timestamp);
+  bool CheckNeedRollLogFiles(time_t timestamp);
 };
 
 // Encapsulate all log cleaner related states
@@ -1228,8 +1228,9 @@ void LogFileObject::CheckHistoryFileNum() {
   }
 }
 
-bool LogFileObject::CheckNeedRollLogFiles(::tm tm_time, time_t timestamp) {
+bool LogFileObject::CheckNeedRollLogFiles(time_t timestamp) {
   bool roll_needed = false;
+  struct ::tm tm_time;
   if (FLAGS_log_rolling_policy == "day") {
     localtime_r(&timestamp, &tm_time);
     if (tm_time.tm_year != tm_time_.tm_year
@@ -1262,8 +1263,7 @@ void LogFileObject::Write(bool force_flush,
   if (base_filename_selected_ && base_filename_.empty()) {
     return;
   }
-  struct ::tm tm_time;
-  bool roll_needed = CheckNeedRollLogFiles(tm_time, timestamp);
+  bool roll_needed = CheckNeedRollLogFiles(timestamp);
   if (roll_needed) {
     if (file_ != NULL) fclose(file_);
     file_ = NULL;
@@ -1297,6 +1297,7 @@ void LogFileObject::Write(bool force_flush,
         file_list_.pop_front();
       }
     }
+    struct ::tm tm_time;
     if (FLAGS_log_utc_time) {
       gmtime_r(&timestamp, &tm_time);
     } else {
