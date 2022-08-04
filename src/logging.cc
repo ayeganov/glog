@@ -1260,8 +1260,14 @@ void LogFileObject::Write(bool force_flush,
       fcntl(fd, F_SETFD, FD_CLOEXEC);
 #endif
       file_ = fopen(filename, "a+"); // Read and append a FILE*.
-      if (file_ == NULL) {      // Man, we're screwed!, try to create new log file
+      if (file_ == NULL) {      // Man, we're screwed!
         close(fd);
+        if (FLAGS_timestamp_in_logfile_name) {
+          unlink(filename);  // Erase the half-baked evidence: an unusable log file, only if we just created it.
+        }
+        perror("Could not create log file");
+        fprintf(stderr, "COULD NOT CREATE LOGFILE '%s'!\n", filename);
+        return;
       }
       fseek(file_, 0, SEEK_END);
       file_length_ = bytes_since_flush_ = ftell(file_);
