@@ -495,7 +495,7 @@ class LogFileObject : public base::Logger {
   int64 next_flush_time_;         // cycle count at which to flush log
   WallTime start_time_;
   std::list<Filetime> file_list_;
-  bool inited_;
+  bool initialized_;
   struct ::tm tm_time_;
 
   // Actually create a logfile using the value of base_filename_ and the
@@ -998,7 +998,7 @@ LogFileObject::LogFileObject(LogSeverity severity,
     rollover_attempt_(kRolloverAttemptFrequency-1),
     next_flush_time_(0),
     start_time_(WallTime_Now()),
-    inited_(false){
+    initialized_(false){
   assert(severity >= 0);
   assert(severity < NUM_SEVERITIES);
 }
@@ -1223,14 +1223,14 @@ void LogFileObject::Write(bool force_flush,
   }
   struct ::tm tm_time;
   bool is_split = false;
-  if ("day" == FLAGS_log_rolling_policy) {
+  if (FLAGS_log_rolling_policy == "day") {
     localtime_r(&timestamp, &tm_time);
     if (tm_time.tm_year != tm_time_.tm_year
         || tm_time.tm_mon != tm_time_.tm_mon
         || tm_time.tm_mday != tm_time_.tm_mday) {
       is_split = true;
     }
-  } else if ("hour" == FLAGS_log_rolling_policy) {
+  } else if (FLAGS_log_rolling_policy == "hour") {
     localtime_r(&timestamp, &tm_time);
     if (tm_time.tm_year != tm_time_.tm_year
         || tm_time.tm_mon != tm_time_.tm_mon
@@ -1247,7 +1247,7 @@ void LogFileObject::Write(bool force_flush,
     file_length_ = bytes_since_flush_ = dropped_mem_length_ = 0;
     rollover_attempt_ = kRolloverAttemptFrequency - 1;
   }
-  if ((file_ == NULL) && (!inited_) && ("size" == FLAGS_log_rolling_policy)) {
+  if ((file_ == NULL) && (!initialized_) && (FLAGS_log_rolling_policy == "size")) {
     CheckHistoryFileNum();
     const char *filename = file_list_.back().name.c_str();
     int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, FLAGS_logfile_mode);
@@ -1262,7 +1262,7 @@ void LogFileObject::Write(bool force_flush,
       }
       fseek(file_, 0, SEEK_END);
       file_length_ = bytes_since_flush_ = ftell(file_);
-      inited_ = true;
+      initialized_ = true;
     }
   }
 
@@ -1274,9 +1274,9 @@ void LogFileObject::Write(bool force_flush,
     if (++rollover_attempt_ != kRolloverAttemptFrequency) return;
     rollover_attempt_ = 0;
 
-    if (!inited_) {
+    if (!initialized_) {
       CheckHistoryFileNum();
-      inited_ = true;
+      initialized_ = true;
     } else {
       while (FLAGS_max_logfile_num > 0 && file_list_.size() >= FLAGS_max_logfile_num) {
         unlink(file_list_.front().name.c_str());
@@ -1295,9 +1295,9 @@ void LogFileObject::Write(bool force_flush,
     time_pid_stream << 1900 + tm_time.tm_year
                     << setw(2) << 1 + tm_time.tm_mon
                     << setw(2) << tm_time.tm_mday;
-    if ("hour" == FLAGS_log_rolling_policy) {
+    if (FLAGS_log_rolling_policy == "hour") {
       time_pid_stream << setw(2) << tm_time.tm_hour;
-    } else if ("day" != FLAGS_log_rolling_policy) {
+    } else if (FLAGS_log_rolling_policy != "day") {
       time_pid_stream << '-'
                       << setw(2) << tm_time.tm_hour
                       << setw(2) << tm_time.tm_min
