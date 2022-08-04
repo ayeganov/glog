@@ -1168,7 +1168,7 @@ void LogFileObject::CheckHistoryFileNum() {
   DIR *dp;
 
   const vector<string> &log_dirs = GetLoggingDirectories();
-  if (log_dirs.size() < 1) return;
+  if (log_dirs.empty()) return;
 
   // list file in log dir
   dp = opendir(log_dirs[0].c_str());
