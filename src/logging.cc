@@ -438,13 +438,13 @@ namespace  {
 #endif
 
 namespace {
-typedef struct filetime {
+struct Filetime {
   std::string name;
-  time_t time;
-  bool operator<(const struct filetime& o) const {
-    return o.time > time;
+  std::time_t time;
+  bool operator<(const struct Filetime& o) const {
+    return time < o.time;
   }
-} Filetime;
+};
 
 // Encapsulates all file-system related state
 class LogFileObject : public base::Logger {
