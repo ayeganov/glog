@@ -1183,7 +1183,7 @@ void LogFileObject::CheckHistoryFileNum() {
         DT_LNK == entry->d_type) {
       continue;
     }
-    std::string filename = std::string(entry->d_name);
+    std::string filename = entry->d_name;
 
     if (filename.find(symlink_basename_ + '.' + LogSeverityNames[severity_]) == 0) {
       std::string filepath = log_dirs[0] + "/" + filename;
