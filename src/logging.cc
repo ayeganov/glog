@@ -1068,58 +1068,6 @@ void LogFileObject::FlushUnlocked(){
   next_flush_time_ = CycleClock_Now() + UsecToCycles(next);
 }
 
-
-bool LogFileObject::CreateLogfileInternal(const char* filename, int flags) {
-  int fd = open(filename, flags, static_cast<mode_t>(FLAGS_logfile_mode));
-  if (fd == -1) return false;
-#ifdef HAVE_FCNTL
-  // Mark the file close-on-exec. We don't really care if this fails
-  fcntl(fd, F_SETFD, FD_CLOEXEC);
-
-  // Mark the file as exclusive write access to avoid two clients logging to the
-  // same file. This applies particularly when !FLAGS_timestamp_in_logfile_name
-  // (otherwise open would fail because the O_EXCL flag on similar filename).
-  // locks are released on unlock or close() automatically, only after log is
-  // released.
-  // This will work after a fork as it is not inherited (not stored in the fd).
-  // Lock will not be lost because the file is opened with exclusive lock (write)
-  // and we will never read from it inside the process.
-  // TODO windows implementation of this (as flock is not available on mingw).
-  static struct flock w_lock;
-
-  w_lock.l_type = F_WRLCK;
-  w_lock.l_start = 0;
-  w_lock.l_whence = SEEK_SET;
-  w_lock.l_len = 0;
-
-  int wlock_ret = fcntl(fd, F_SETLK, &w_lock);
-  if (wlock_ret == -1) {
-      close(fd); //as we are failing already, do not check errors here
-      return false;
-  }
-#endif
-
-  //fdopen in append mode so if the file exists it will fseek to the end
-  file_ = fdopen(fd, "a");  // Make a FILE*.
-  if (file_ == NULL) {  // Man, we're screwed!
-    close(fd);
-    if (FLAGS_timestamp_in_logfile_name) {
-      unlink(filename);  // Erase the half-baked evidence: an unusable log file, only if we just created it.
-    }
-    return false;
-  }
-#ifdef GLOG_OS_WINDOWS
-  // https://github.com/golang/go/issues/27638 - make sure we seek to the end to append
-  // empirically replicated with wine over mingw build
-  if (!FLAGS_timestamp_in_logfile_name) {
-    if (fseek(file_, 0, SEEK_END) != 0) {
-      return false;
-    }
-  }
-#endif
-  return true;
-}
-
 bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   string string_filename = base_filename_;
   if (FLAGS_timestamp_in_logfile_name) {
@@ -1179,6 +1127,57 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   }
 
   return true;  // Everything worked
+}
+
+bool LogFileObject::CreateLogfileInternal(const char* filename, int flags) {
+  int fd = open(filename, flags, static_cast<mode_t>(FLAGS_logfile_mode));
+  if (fd == -1) return false;
+#ifdef HAVE_FCNTL
+  // Mark the file close-on-exec. We don't really care if this fails
+  fcntl(fd, F_SETFD, FD_CLOEXEC);
+
+  // Mark the file as exclusive write access to avoid two clients logging to the
+  // same file. This applies particularly when !FLAGS_timestamp_in_logfile_name
+  // (otherwise open would fail because the O_EXCL flag on similar filename).
+  // locks are released on unlock or close() automatically, only after log is
+  // released.
+  // This will work after a fork as it is not inherited (not stored in the fd).
+  // Lock will not be lost because the file is opened with exclusive lock (write)
+  // and we will never read from it inside the process.
+  // TODO windows implementation of this (as flock is not available on mingw).
+  static struct flock w_lock;
+
+  w_lock.l_type = F_WRLCK;
+  w_lock.l_start = 0;
+  w_lock.l_whence = SEEK_SET;
+  w_lock.l_len = 0;
+
+  int wlock_ret = fcntl(fd, F_SETLK, &w_lock);
+  if (wlock_ret == -1) {
+      close(fd); //as we are failing already, do not check errors here
+      return false;
+  }
+#endif
+
+  //fdopen in append mode so if the file exists it will fseek to the end
+  file_ = fdopen(fd, "a");  // Make a FILE*.
+  if (file_ == NULL) {  // Man, we're screwed!
+    close(fd);
+    if (FLAGS_timestamp_in_logfile_name) {
+      unlink(filename);  // Erase the half-baked evidence: an unusable log file, only if we just created it.
+    }
+    return false;
+  }
+#ifdef GLOG_OS_WINDOWS
+  // https://github.com/golang/go/issues/27638 - make sure we seek to the end to append
+  // empirically replicated with wine over mingw build
+  if (!FLAGS_timestamp_in_logfile_name) {
+    if (fseek(file_, 0, SEEK_END) != 0) {
+      return false;
+    }
+  }
+#endif
+  return true;
 }
 
 void LogFileObject::CheckHistoryFileNum() {
