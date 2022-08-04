@@ -505,6 +505,12 @@ class LogFileObject : public base::Logger {
   // optional argument time_pid_string
   // REQUIRES: lock_ is held
   bool CreateLogfile(const string& time_pid_string);
+
+  // Actually create a logfile using full file name and flags
+  bool CreateLogfileInternal(const char* filename, int flags);
+
+  // Check if log file is getting too big or match the date time condition, If so, rollover.
+  bool CheckNeedRollLogFiles(::tm tm_time, time_t timestamp);
 };
 
 // Encapsulate all log cleaner related states
@@ -1062,19 +1068,8 @@ void LogFileObject::FlushUnlocked(){
   next_flush_time_ = CycleClock_Now() + UsecToCycles(next);
 }
 
-bool LogFileObject::CreateLogfile(const string& time_pid_string) {
-  string string_filename = base_filename_;
-  if (FLAGS_timestamp_in_logfile_name) {
-    string_filename += time_pid_string;
-  }
-  string_filename += filename_extension_;
-  const char* filename = string_filename.c_str();
-  //only write to files, create if non-existant.
-  int flags = O_WRONLY | O_CREAT;
-  if (FLAGS_timestamp_in_logfile_name) {
-    //demand that the file is unique for our timestamp (fail if it exists).
-    flags = flags | O_EXCL;
-  }
+
+bool LogFileObject::CreateLogfileInternal(const char* filename, int flags) {
   int fd = open(filename, flags, static_cast<mode_t>(FLAGS_logfile_mode));
   if (fd == -1) return false;
 #ifdef HAVE_FCNTL
@@ -1122,6 +1117,26 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
     }
   }
 #endif
+  return true;
+}
+
+bool LogFileObject::CreateLogfile(const string& time_pid_string) {
+  string string_filename = base_filename_;
+  if (FLAGS_timestamp_in_logfile_name) {
+    string_filename += time_pid_string;
+  }
+  string_filename += filename_extension_;
+  const char* filename = string_filename.c_str();
+  //only write to files, create if non-existant.
+  int flags = O_WRONLY | O_CREAT;
+  if (FLAGS_timestamp_in_logfile_name) {
+    //demand that the file is unique for our timestamp (fail if it exists).
+    flags = flags | O_EXCL;
+  }
+  bool success = CreateLogfileInternal(filename, flags);
+  if (!success) {
+    return false;
+  }
   Filetime ft;
   ft.name = string_filename;
   file_list_.push_back(ft);
@@ -1214,6 +1229,30 @@ void LogFileObject::CheckHistoryFileNum() {
   }
 }
 
+bool LogFileObject::CheckNeedRollLogFiles(::tm tm_time, time_t timestamp) {
+  bool roll_needed = false;
+  if (FLAGS_log_rolling_policy == "day") {
+    localtime_r(&timestamp, &tm_time);
+    if (tm_time.tm_year != tm_time_.tm_year
+        || tm_time.tm_mon != tm_time_.tm_mon
+        || tm_time.tm_mday != tm_time_.tm_mday) {
+      roll_needed = true;
+    }
+  } else if (FLAGS_log_rolling_policy == "hour") {
+    localtime_r(&timestamp, &tm_time);
+    if (tm_time.tm_year != tm_time_.tm_year
+        || tm_time.tm_mon != tm_time_.tm_mon
+        || tm_time.tm_mday != tm_time_.tm_mday
+        || tm_time.tm_hour != tm_time_.tm_hour) {
+      roll_needed = true;
+    }
+  } else if (file_length_ >> 20U >= MaxLogSize() || PidHasChanged()) {
+    roll_needed = true;
+  }
+
+  return roll_needed;
+}
+
 void LogFileObject::Write(bool force_flush,
                           time_t timestamp,
                           const char* message,
@@ -1225,26 +1264,8 @@ void LogFileObject::Write(bool force_flush,
     return;
   }
   struct ::tm tm_time;
-  bool is_split = false;
-  if (FLAGS_log_rolling_policy == "day") {
-    localtime_r(&timestamp, &tm_time);
-    if (tm_time.tm_year != tm_time_.tm_year
-        || tm_time.tm_mon != tm_time_.tm_mon
-        || tm_time.tm_mday != tm_time_.tm_mday) {
-      is_split = true;
-    }
-  } else if (FLAGS_log_rolling_policy == "hour") {
-    localtime_r(&timestamp, &tm_time);
-    if (tm_time.tm_year != tm_time_.tm_year
-        || tm_time.tm_mon != tm_time_.tm_mon
-        || tm_time.tm_mday != tm_time_.tm_mday
-        || tm_time.tm_hour != tm_time_.tm_hour) {
-      is_split = true;
-    }
-  } else if (file_length_ >> 20U >= MaxLogSize() || PidHasChanged()) {
-    is_split = true;
-  }
-  if (is_split) {
+  bool roll_needed = CheckNeedRollLogFiles(tm_time, timestamp);
+  if (roll_needed) {
     if (file_ != NULL) fclose(file_);
     file_ = NULL;
     file_length_ = bytes_since_flush_ = dropped_mem_length_ = 0;
@@ -1253,24 +1274,9 @@ void LogFileObject::Write(bool force_flush,
   if ((file_ == NULL) && (!initialized_) && (FLAGS_log_rolling_policy == "size")) {
     CheckHistoryFileNum();
     const char *filename = file_list_.back().name.c_str();
-    int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, FLAGS_logfile_mode);
-    if (fd != -1) {
-#ifdef HAVE_FCNTL
-      // Mark the file close-on-exec. We don't really care if this fails
-      fcntl(fd, F_SETFD, FD_CLOEXEC);
-#endif
-      file_ = fopen(filename, "a+"); // Read and append a FILE*.
-      if (file_ == NULL) {      // Man, we're screwed!
-        close(fd);
-        if (FLAGS_timestamp_in_logfile_name) {
-          unlink(filename);  // Erase the half-baked evidence: an unusable log file, only if we just created it.
-        }
-        perror("Could not create log file");
-        fprintf(stderr, "COULD NOT CREATE LOGFILE '%s'!\n", filename);
-        return;
-      }
-      fseek(file_, 0, SEEK_END);
-      file_length_ = bytes_since_flush_ = ftell(file_);
+    int flags = O_WRONLY | O_CREAT | O_APPEND;
+    bool success = CreateLogfileInternal(filename, flags);
+    if (success) {
       initialized_ = true;
     }
   }
