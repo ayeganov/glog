@@ -56,7 +56,7 @@
 #ifdef HAVE_SYSLOG_H
 # include <syslog.h>
 #endif
-#include <list>
+#include <set>
 #include <vector>
 #include <cerrno>                   // for errno
 #include <sstream>
@@ -78,7 +78,7 @@
 #include <android/log.h>
 #endif
 
-using std::list;
+using std::multiset;
 using std::string;
 using std::vector;
 using std::setw;
@@ -497,7 +497,7 @@ class LogFileObject : public base::Logger {
   unsigned int rollover_attempt_;
   int64 next_flush_time_;         // cycle count at which to flush log
   WallTime start_time_;
-  std::list<Filetime> file_list_;
+  std::multiset<Filetime> file_list_;
   bool initialized_;
   struct ::tm tm_time_;
 
@@ -1138,7 +1138,7 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   }
   Filetime ft;
   ft.name = string_filename;
-  file_list_.push_back(ft);
+  file_list_.insert(ft);
   // We try to create a symlink called <program_name>.<severity>,
   // which is easier to use.  (Every time we create a new logfile,
   // we destroy the old symlink and create a new one, so it always
@@ -1215,16 +1215,14 @@ void LogFileObject::CheckHistoryFileNum() {
       Filetime file_time;
       file_time.time = fstat.st_mtime;
       file_time.name = filepath;
-      file_list_.push_back(file_time);
+      file_list_.insert(file_time);
     }
   }
   closedir(dp);
 
-  file_list_.sort();
-
   while (FLAGS_max_logfile_num > 0 && file_list_.size() >= FLAGS_max_logfile_num) {
-    unlink(file_list_.front().name.c_str());
-    file_list_.pop_front();
+    unlink(file_list_.begin()->name.c_str());
+    file_list_.erase(file_list_.begin());
   }
 }
 
@@ -1272,12 +1270,17 @@ void LogFileObject::Write(bool force_flush,
   }
   if ((file_ == NULL) && (!initialized_) && (FLAGS_log_rolling_policy == "size")) {
     CheckHistoryFileNum();
-    const char *filename = file_list_.back().name.c_str();
-    int flags = O_WRONLY | O_CREAT | O_APPEND;
-    bool success = CreateLogfileInternal(filename, flags);
-    if (success) {
-      initialized_ = true;
+    if (!file_list_.empty()) {
+      std::multiset<Filetime>::iterator it = file_list_.end();
+      it--;
+      const char *filename = it->name.c_str();
+      int flags = O_WRONLY | O_CREAT | O_APPEND;
+      bool success = CreateLogfileInternal(filename, flags);
+      if (success) {
+        initialized_ = true;
+      }
     }
+
   }
 
   // If there's no destination file, make one before outputting
@@ -1293,8 +1296,8 @@ void LogFileObject::Write(bool force_flush,
       initialized_ = true;
     } else {
       while (FLAGS_max_logfile_num > 0 && file_list_.size() >= FLAGS_max_logfile_num) {
-        unlink(file_list_.front().name.c_str());
-        file_list_.pop_front();
+        unlink(file_list_.begin()->name.c_str());
+        file_list_.erase(file_list_.begin());
       }
     }
     struct ::tm tm_time;
