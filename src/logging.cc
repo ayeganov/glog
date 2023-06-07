@@ -1250,7 +1250,8 @@ bool LogFileObject::CheckNeedRollLogFiles(time_t timestamp) {
         || tm_time.tm_mday != tm_time_.tm_mday) {
       roll_needed = true;
     }
-  } else if (FLAGS_log_rolling_policy == "hour") {
+  }
+  else if (FLAGS_log_rolling_policy == "hour") {
     localtime_r(&timestamp, &tm_time);
     if (tm_time.tm_year != tm_time_.tm_year
         || tm_time.tm_mon != tm_time_.tm_mon
@@ -1258,7 +1259,18 @@ bool LogFileObject::CheckNeedRollLogFiles(time_t timestamp) {
         || tm_time.tm_hour != tm_time_.tm_hour) {
       roll_needed = true;
     }
-  } else if (file_length_ >> 20U >= MaxLogSize() || PidHasChanged()) {
+  }
+  else if (FLAGS_log_rolling_policy == "minute") {
+    localtime_r(&timestamp, &tm_time);
+    if (tm_time.tm_year != tm_time_.tm_year
+        || tm_time.tm_mon != tm_time_.tm_mon
+        || tm_time.tm_mday != tm_time_.tm_mday
+        || tm_time.tm_hour != tm_time_.tm_hour
+        || tm_time.tm_min != tm_time_.tm_min) {
+      roll_needed = true;
+    }
+  }
+  else if (file_length_ >> 20U >= MaxLogSize() || PidHasChanged()) {
     roll_needed = true;
   }
 
